@@ -1,0 +1,31 @@
+/* 状态栏样式 */
+.status-bar-item.plugin-smart-indent {
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.status-bar-item.plugin-smart-indent:hover {
+    transform: scale(1.05);
+}
+
+/* 设置面板样式 */
+.setting-item-description {
+    color: var(--text-muted);
+    font-size: 0.9em;
+    margin-top: 4px;
+}
+
+.setting-item-info {
+    margin-bottom: 8px;
+}
+
+/* 通知样式 */
+.notice-content .smart-indent-notice {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.notice-content .smart-indent-icon {
+    font-size: 1.2em;
+}

@@ -1,0 +1,10 @@
+{
+    "id": "smart-indent",
+    "name": "智能首行缩进",
+    "version": "1.0.0",
+    "minAppVersion": "0.15.0",
+    "description": "为中文排版提供智能首行缩进功能，自动排除列表、表格、代码等格式化内容",
+    "author": "dhtc",
+    "authorUrl": "",
+    "isDesktopOnly": false
+}

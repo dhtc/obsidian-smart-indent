@@ -444,7 +444,8 @@ class SmartIndentPlugin extends Plugin {
             
             if (!isListItem && !isExcluded) {
                 // processedLines.push(this.indentChar + line.trimStart());
-                processedLines.push("<font style='margin-left: 2em'>" + line.trimStart() + "</font>");
+                // processedLines.push("<font style='margin-left: 2em'>" + line.trimStart() + "</font>");
+                processedLines.push("<p style='text-indent:2em' >" + line.trimStart() + "</p>");
             } else {
                 processedLines.push(line);
             }

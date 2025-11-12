@@ -443,7 +443,8 @@ class SmartIndentPlugin extends Plugin {
                               /^\s{4}/.test(line);
             
             if (!isListItem && !isExcluded) {
-                processedLines.push(this.indentChar + line.trimStart());
+                // processedLines.push(this.indentChar + line.trimStart());
+                processedLines.push("<font style='margin-left: 2em'>" + line.trimStart() + "</font>");
             } else {
                 processedLines.push(line);
             }

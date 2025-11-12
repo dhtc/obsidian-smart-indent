@@ -33,23 +33,23 @@ class SmartIndentPlugin extends Plugin {
             callback: () => this.removeFirstLineIndent(),
         });
         
-        // 新增：只对选中文字调整缩进
+        // 选中文字/当前段落处理命令
         this.addCommand({
-            id: 'toggle-selected-indent',
-            name: '切换选中文字首行缩进',
-            callback: () => this.toggleSelectedIndent(),
+            id: 'toggle-paragraph-indent',
+            name: '切换当前段落/选中文字首行缩进',
+            callback: () => this.toggleParagraphOrSelectedIndent(),
         });
         
         this.addCommand({
-            id: 'add-selected-indent',
-            name: '添加选中文字首行缩进',
-            callback: () => this.addSelectedIndent(),
+            id: 'add-paragraph-indent',
+            name: '添加当前段落/选中文字首行缩进',
+            callback: () => this.addParagraphOrSelectedIndent(),
         });
         
         this.addCommand({
-            id: 'remove-selected-indent',
-            name: '移除选中文字首行缩进',
-            callback: () => this.removeSelectedIndent(),
+            id: 'remove-paragraph-indent',
+            name: '移除当前段落/选中文字首行缩进',
+            callback: () => this.removeParagraphOrSelectedIndent(),
         });
         
         // 注册设置选项卡
@@ -92,8 +92,8 @@ class SmartIndentPlugin extends Plugin {
         });
     }
     
-    // 获取当前编辑器内容
-    getEditorContent() {
+    // 获取当前编辑器信息
+    getEditorInfo() {
         const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
         if (!activeView || !(activeView.editor)) {
             new Notice('❌ 请在Markdown编辑器中使用此功能');
@@ -103,7 +103,8 @@ class SmartIndentPlugin extends Plugin {
             view: activeView,
             editor: activeView.editor,
             content: activeView.editor.getValue(),
-            selection: activeView.editor.getSelection()
+            selection: activeView.editor.getSelection(),
+            cursor: activeView.editor.getCursor()
         };
     }
     
@@ -236,7 +237,7 @@ class SmartIndentPlugin extends Plugin {
     
     // 添加全文首行缩进
     addFirstLineIndent() {
-        const editorInfo = this.getEditorContent();
+        const editorInfo = this.getEditorInfo();
         if (!editorInfo) return;
         
         try {
@@ -263,7 +264,7 @@ class SmartIndentPlugin extends Plugin {
     
     // 移除全文首行缩进
     removeFirstLineIndent() {
-        const editorInfo = this.getEditorContent();
+        const editorInfo = this.getEditorInfo();
         if (!editorInfo) return;
         
         try {
@@ -294,144 +295,256 @@ class SmartIndentPlugin extends Plugin {
         }
     }
     
-    // ===== 选中文字处理方法（新增）=====
+    // ===== 获取当前段落范围 =====
     
-    // 添加选中文字首行缩进
-    addSelectedIndent() {
-        const editorInfo = this.getEditorContent();
-        if (!editorInfo) return;
+    // 获取当前光标所在段落的范围
+    getParagraphRange(editor, cursor) {
+        const currentLine = cursor.line;
+        const totalLines = editor.lineCount();
         
-        const selection = editorInfo.editor.getSelection();
-        if (!selection || selection.trim() === '') {
-            new Notice('❌ 请先选中要缩进的文本');
-            return;
+        // 向上查找段落开始
+        let startLine = currentLine;
+        while (startLine > 0) {
+            const lineContent = editor.getLine(startLine - 1).trim();
+            if (lineContent === '' || this.isExcludedLine(lineContent)) {
+                break;
+            }
+            startLine--;
         }
         
+        // 向下查找段落结束
+        let endLine = currentLine;
+        while (endLine < totalLines - 1) {
+            const lineContent = editor.getLine(endLine + 1).trim();
+            if (lineContent === '' || this.isExcludedLine(lineContent)) {
+                break;
+            }
+            endLine++;
+        }
+        
+        return {
+            startLine,
+            endLine,
+            lineCount: endLine - startLine + 1
+        };
+    }
+    
+    // 判断是否是需要排除的行（列表、标题等）
+    isExcludedLine(line) {
+        // 检查是否是列表行
+        const isListItem = /^\s*(\d+\.|\-|\*|\+)\s/.test(line) || 
+                          /^\s{2,}\s*(\d+\.|\-|\*|\+)\s/.test(line) ||
+                          /^\s*>/.test(line);
+        
+        // 检查是否是排除格式
+        const isExcluded = /^(\s*#|```|<[^>]+>|\|[^|]*\||[\-\*]{3,})/.test(line) ||
+                          /^\s{4}/.test(line);
+        
+        return isListItem || isExcluded;
+    }
+    
+    // 获取段落内容
+    getParagraphContent(editor, range) {
+        const lines = [];
+        for (let i = range.startLine; i <= range.endLine; i++) {
+            lines.push(editor.getLine(i));
+        }
+        return lines.join('\n');
+    }
+    
+    // ===== 智能处理：选中文字或当前段落 =====
+    
+    // 智能判断：处理选中文字或当前段落
+    processSelectionOrParagraph(editor, cursor, selection, processFunction, actionName) {
         try {
-            // 获取选中范围
-            const selectionRange = editorInfo.editor.listSelections()[0];
-            const fromLine = selectionRange.anchor.line;
-            const toLine = selectionRange.head.line;
+            let processedContent = '';
+            let rangeInfo = null;
+            let isSelection = false;
             
-            // 按行分割选中内容
-            const selectedLines = selection.split('\n');
-            const processedLines = [];
-            
-            // 处理选中的每一行
-            for (const line of selectedLines) {
-                if (/^\s*$/.test(line)) {
-                    processedLines.push(line); // 空行保持不变
-                    continue;
+            // 情况1：有选中文本
+            if (selection && selection.trim() !== '') {
+                isSelection = true;
+                rangeInfo = {
+                    startLine: editor.listSelections()[0].anchor.line,
+                    endLine: editor.listSelections()[0].head.line
+                };
+                processedContent = processFunction(selection);
+                
+                new Notice(`✅ ${actionName}已应用到选中文字（${rangeInfo.endLine - rangeInfo.startLine + 1}行）`);
+            } 
+            // 情况2：无选中文本，处理当前段落
+            else {
+                // 获取当前段落范围
+                const paragraphRange = this.getParagraphRange(editor, cursor);
+                rangeInfo = paragraphRange;
+                
+                // 获取段落内容
+                const paragraphContent = this.getParagraphContent(editor, paragraphRange);
+                
+                // 检查是否是需要排除的段落（如列表段落）
+                if (this.isParagraphExcluded(paragraphContent)) {
+                    new Notice(`ℹ️ 当前段落是列表或特殊格式，${actionName}未应用`);
+                    return false;
                 }
                 
-                // 检查是否是列表行
-                const isListItem = /^\s*(\d+\.|\-|\*|\+)\s/.test(line) || 
-                                  /^\s{2,}\s*(\d+\.|\-|\*|\+)\s/.test(line) ||
-                                  /^\s*>/.test(line);
+                processedContent = processFunction(paragraphContent);
                 
-                // 检查是否是排除格式
-                const isExcluded = /^(\s*#|```|<[^>]+>|\|[^|]*\||[\-\*]{3,})/.test(line) ||
-                                  /^\s{4}/.test(line);
-                
-                if (!isListItem && !isExcluded) {
-                    // 普通段落，添加缩进
-                    processedLines.push(this.indentChar + line.trimStart());
-                } else {
-                    // 列表或排除格式，保持原样
-                    processedLines.push(line);
-                }
+                new Notice(`✅ ${actionName}已应用到当前段落（${paragraphRange.lineCount}行）`);
             }
             
-            // 重新组合处理后的内容
-            const processedSelection = processedLines.join('\n');
+            // 替换内容
+            if (isSelection) {
+                // 替换选中内容
+                editor.replaceSelection(processedContent);
+            } else {
+                // 替换整个段落
+                const start = { line: rangeInfo.startLine, ch: 0 };
+                const end = { line: rangeInfo.endLine, ch: editor.getLine(rangeInfo.endLine).length };
+                editor.replaceRange(processedContent, start, end);
+            }
             
-            // 替换选中内容
-            editorInfo.editor.replaceSelection(processedSelection);
-            
-            new Notice(`✅ 选中文字首行缩进已添加（${selectedLines.length}行）`);
-            console.log('选中文字首行缩进添加成功');
-            
+            return true;
         } catch (error) {
-            console.error('添加选中文字首行缩进时出错:', error);
-            new Notice('❌ 添加选中文字首行缩进时出错，请查看控制台');
+            console.error(`${actionName}时出错:`, error);
+            new Notice(`❌ ${actionName}时出错，请查看控制台`);
+            return false;
         }
     }
     
-    // 移除选中文字首行缩进
-    removeSelectedIndent() {
-        const editorInfo = this.getEditorContent();
-        if (!editorInfo) return;
-        
-        const selection = editorInfo.editor.getSelection();
-        if (!selection || selection.trim() === '') {
-            new Notice('❌ 请先选中要移除缩进的文本');
-            return;
-        }
-        
-        try {
-            // 按行分割选中内容
-            const selectedLines = selection.split('\n');
-            const processedLines = [];
-            
-            for (const line of selectedLines) {
-                if (/^\s*$/.test(line)) {
-                    processedLines.push(line); // 空行保持不变
-                    continue;
-                }
-                
-                // 检查是否是列表行
-                const isListItem = /^\s*(\d+\.|\-|\*|\+)\s/.test(line) || 
-                                  /^\s{2,}\s*(\d+\.|\-|\*|\+)\s/.test(line) ||
-                                  /^\s*>/.test(line);
-                
-                // 检查是否是排除格式
-                const isExcluded = /^(\s*#|```|<[^>]+>|\|[^|]*\||[\-\*]{3,})/.test(line) ||
-                                  /^\s{4}/.test(line);
-                
-                if (!isListItem && !isExcluded) {
-                    // 普通段落，移除缩进
-                    processedLines.push(line.replace(/^[‌‌‌‌　\s]+/, ''));
-                } else {
-                    // 列表或排除格式，保持原样
-                    processedLines.push(line);
-                }
+    // 判断段落是否需要排除
+    isParagraphExcluded(paragraphContent) {
+        const lines = paragraphContent.split('\n');
+        for (const line of lines) {
+            if (this.isExcludedLine(line.trim())) {
+                return true;
             }
-            
-            // 重新组合处理后的内容
-            const processedSelection = processedLines.join('\n');
-            
-            // 替换选中内容
-            editorInfo.editor.replaceSelection(processedSelection);
-            
-            new Notice(`✅ 选中文字首行缩进已移除（${selectedLines.length}行）`);
-            console.log('选中文字首行缩进移除成功');
-            
-        } catch (error) {
-            console.error('移除选中文字首行缩进时出错:', error);
-            new Notice('❌ 移除选中文字首行缩进时出错，请查看控制台');
         }
+        return false;
     }
     
-    // 切换选中文字首行缩进
-    toggleSelectedIndent() {
-        const editorInfo = this.getEditorContent();
-        if (!editorInfo) return;
+    // ===== 具体处理函数 =====
+    
+    // 添加缩进处理函数
+    processAddIndent(text) {
+        const lines = text.split('\n');
+        const processedLines = [];
         
-        const selection = editorInfo.editor.getSelection();
-        if (!selection || selection.trim() === '') {
-            new Notice('❌ 请先选中要处理的文本');
-            return;
+        for (const line of lines) {
+            if (/^\s*$/.test(line)) {
+                processedLines.push(line);
+                continue;
+            }
+            
+            const isListItem = /^\s*(\d+\.|\-|\*|\+)\s/.test(line) || 
+                              /^\s{2,}\s*(\d+\.|\-|\*|\+)\s/.test(line) ||
+                              /^\s*>/.test(line);
+            
+            const isExcluded = /^(\s*#|```|<[^>]+>|\|[^|]*\||[\-\*]{3,})/.test(line) ||
+                              /^\s{4}/.test(line);
+            
+            if (!isListItem && !isExcluded) {
+                processedLines.push(this.indentChar + line.trimStart());
+            } else {
+                processedLines.push(line);
+            }
         }
         
-        // 智能判断：如果选中的第一行没有缩进，就添加；如果有缩进，就移除
-        const firstLine = selection.split('\n')[0].trim();
-        const hasIndent = selection.split('\n')[0].startsWith(this.indentChar) || 
-                         /^\s{2,}/.test(selection.split('\n')[0]);
+        return processedLines.join('\n');
+    }
+    
+    // 移除缩进处理函数
+    processRemoveIndent(text) {
+        const lines = text.split('\n');
+        const processedLines = [];
         
-        if (hasIndent) {
-            this.removeSelectedIndent();
+        for (const line of lines) {
+            if (/^\s*$/.test(line)) {
+                processedLines.push(line);
+                continue;
+            }
+            
+            const isListItem = /^\s*(\d+\.|\-|\*|\+)\s/.test(line) || 
+                              /^\s{2,}\s*(\d+\.|\-|\*|\+)\s/.test(line) ||
+                              /^\s*>/.test(line);
+            
+            const isExcluded = /^(\s*#|```|<[^>]+>|\|[^|]*\||[\-\*]{3,})/.test(line) ||
+                              /^\s{4}/.test(line);
+            
+            if (!isListItem && !isExcluded) {
+                processedLines.push(line.replace(/^[‌‌‌‌　\s]+/, ''));
+            } else {
+                processedLines.push(line);
+            }
+        }
+        
+        return processedLines.join('\n');
+    }
+    
+    // 判断是否有缩进
+    hasIndent(text) {
+        const firstLine = text.split('\n')[0];
+        return firstLine.startsWith(this.indentChar) || /^\s{2,}/.test(firstLine);
+    }
+    
+    // ===== 命令实现 =====
+    
+    // 添加当前段落/选中文字首行缩进
+    addParagraphOrSelectedIndent() {
+        const editorInfo = this.getEditorInfo();
+        if (!editorInfo) return;
+        
+        this.processSelectionOrParagraph(
+            editorInfo.editor,
+            editorInfo.cursor,
+            editorInfo.selection,
+            (text) => this.processAddIndent(text),
+            '添加首行缩进'
+        );
+    }
+    
+    // 移除当前段落/选中文字首行缩进
+    removeParagraphOrSelectedIndent() {
+        const editorInfo = this.getEditorInfo();
+        if (!editorInfo) return;
+        
+        this.processSelectionOrParagraph(
+            editorInfo.editor,
+            editorInfo.cursor,
+            editorInfo.selection,
+            (text) => this.processRemoveIndent(text),
+            '移除首行缩进'
+        );
+    }
+    
+    // 切换当前段落/选中文字首行缩进
+    toggleParagraphOrSelectedIndent() {
+        const editorInfo = this.getEditorInfo();
+        if (!editorInfo) return;
+        
+        if (editorInfo.selection && editorInfo.selection.trim() !== '') {
+            // 有选中文本
+            const hasExistingIndent = this.hasIndent(editorInfo.selection);
+            if (hasExistingIndent) {
+                this.removeParagraphOrSelectedIndent();
+            } else {
+                this.addParagraphOrSelectedIndent();
+            }
         } else {
-            this.addSelectedIndent();
+            // 无选中文本，处理当前段落
+            const paragraphRange = this.getParagraphRange(editorInfo.editor, editorInfo.cursor);
+            const paragraphContent = this.getParagraphContent(editorInfo.editor, paragraphRange);
+            
+            if (this.isParagraphExcluded(paragraphContent)) {
+                new Notice('ℹ️ 当前段落是列表或特殊格式，无法切换缩进');
+                return;
+            }
+            
+            const hasExistingIndent = this.hasIndent(paragraphContent);
+            if (hasExistingIndent) {
+                this.removeParagraphOrSelectedIndent();
+            } else {
+                this.addParagraphOrSelectedIndent();
+            }
         }
     }
 }
@@ -454,7 +567,7 @@ class SmartIndentSettingTab extends PluginSettingTab {
         // 模式说明
         containerEl.createEl('div', {
             cls: 'setting-item-description',
-            text: '💡 两种模式：1) 全文处理 2) 仅选中文字处理'
+            text: '💡 三种模式：1) 全文处理 2) 选中文字处理 3) 当前段落处理（无选中时）'
         });
         
         // 缩进字符设置
@@ -567,85 +680,118 @@ class SmartIndentSettingTab extends PluginSettingTab {
             cls: 'setting-item-description',
             innerHTML: `
                 <li><code>切换全文首行缩进</code> - 对整个文档应用/移除首行缩进</li>
-                <li><code>添加全文首行缩进</code> - 仅添加缩进</li>
-                <li><code>移除全文首行缩进</code> - 仅移除缩进</li>
             `
         });
         
         containerEl.createEl('div', {
             cls: 'setting-item-description',
-            text: '🎯 选中文字处理命令（新增）：'
+            text: '🎯 智能处理命令（推荐使用）：'
         });
         
         containerEl.createEl('ul', {
             cls: 'setting-item-description',
             innerHTML: `
-                <li><code>切换选中文字首行缩进</code> - 智能判断并切换选中文字的缩进</li>
-                <li><code>添加选中文字首行缩进</code> - 仅对选中文字添加缩进</li>
-                <li><code>移除选中文字首行缩进</code> - 仅对选中文字移除缩进</li>
+                <li><code>切换当前段落/选中文字首行缩进</code> - 无选中时处理当前段落，有选中时处理选中文字</li>
+                <li><code>添加当前段落/选中文字首行缩进</code> - 只添加缩进</li>
+                <li><code>移除当前段落/选中文字首行缩进</code> - 只移除缩进</li>
             `
         });
         
         containerEl.createEl('div', {
             cls: 'setting-item-description',
-            text: '💡 提示：选中文字处理会智能识别列表和格式，只对普通段落生效'
+            text: '💡 智能特性：'
+        });
+        
+        containerEl.createEl('ul', {
+            cls: 'setting-item-description',
+            innerHTML: `
+                <li><strong>自动识别段落</strong>：无选中时，自动识别光标所在的完整段落</li>
+                <li><strong>智能排除</strong>：自动跳过列表、表格、代码等特殊格式</li>
+                <li><strong>段落保护</strong>：列表段落不会被误处理，保持原有缩进</li>
+                <li><strong>精准控制</strong>：只影响需要缩进的普通段落</li>
+            `
         });
         
         // 测试按钮
         containerEl.createEl('h3', { text: '测试功能' });
         
         new Setting(containerEl)
-            .setName('测试多层级列表')
-            .setDesc('插入测试内容，包含多层级列表和普通段落')
+            .setName('测试段落处理')
+            .setDesc('插入测试内容，体验无选中时的段落处理功能')
             .addButton(button => button
                 .setButtonText('插入测试内容')
                 .onClick(() => {
-                    const testContent = `# 这是标题（不应缩进）
+                    const testContent = `# 文档标题（不应缩进）
 
-这是普通段落（应该缩进）。注意观察首行缩进效果。
-这是第二行，没有缩进。
+这是第一个普通段落。当光标在这个段落中且没有选中文字时，执行命令会处理整个段落。
+注意：这是一个多行段落，包含：
+- 项目符号
+- 换行
+- 各种内容
 
-1. 顶级有序列表（不应缩进）
-    1. 子列表项（应保持缩进，不应添加首行缩进）
-        1. 孙列表项（应保持缩进，不应添加首行缩进）
-    2. 另一个子列表项
-2. 另一个顶级列表项
+1. 有序列表（不应缩进）
+   这是列表项的内容，包含多行文本。
+   1. 子列表项（应保持原有缩进）
+      这是子列表项的内容。
 
-- 顶级无序列表（不应缩进）
-    - 子列表项（应保持缩进）
-        - 孙列表项（应保持缩进）
-    - 另一个子列表项
-
-> 顶级引用块（不应缩进）
+> 引用块（不应缩进）
+> 这是引用的内容，包含多行。
 >     > 嵌套引用（应保持缩进）
->     这是嵌套引用的内容
 
 | 表格 | 测试 |（不应缩进）
 |------|------|
 | 单元格1 | 单元格2 |
 
-代码块（不应缩进）：
+这是第二个普通段落。可以测试选中部分文字或无选中时的处理效果。
+第二行内容。
+第三行内容。
+
+- 无序列表（不应缩进）
+  - 子列表项
+    - 孙列表项
+  
 \`\`\`javascript
-console.log('hello');
-    console.log('这行代码有缩进，应保持不变');
+// 代码块（不应缩进）
+function test() {
+    console.log('hello');
+    console.log('world');
+}
 \`\`\`
 
-这是另一个普通段落（应该缩进）。
-注意：选中部分文字测试"选中文字首行缩进"功能。
+这是最后一个普通段落，用于测试段落识别功能。
+当光标在段落中间时，应该能正确识别整个段落范围。
 
-1. 最后一个列表测试
+1. 另一个列表测试
    1. 子项1
-      1. 子子项1
+      1. 孙项1
    2. 子项2`;
 
                     const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
                     if (activeView && activeView.editor) {
                         activeView.editor.setValue(testContent);
-                        new Notice('✅ 测试内容已插入，请使用命令测试功能');
+                        new Notice('✅ 测试内容已插入，请将光标放在不同位置测试功能');
                     } else {
                         new Notice('❌ 请先打开一个Markdown文件');
                     }
                 }));
+        
+        // 使用示例
+        containerEl.createEl('h3', { text: '使用示例' });
+        
+        containerEl.createEl('div', {
+            cls: 'setting-item-description',
+            text: '1. 将光标放在普通段落中，按 Ctrl+P，输入"切换当前段落"'
+        });
+        
+        containerEl.createEl('div', {
+            cls: 'setting-item-description',
+            text: '2. 选中一段文字，按 Ctrl+P，输入"切换当前段落"'
+        });
+        
+        containerEl.createEl('div', {
+            cls: 'setting-item-description',
+            text: '3. 将光标放在列表段落中，执行命令（应该无变化）'
+        });
         
         // 重置按钮
         new Setting(containerEl)
